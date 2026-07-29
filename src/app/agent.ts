@@ -16,9 +16,12 @@ interface AgentStep {
     functionInput?: string;
 }
 
+export type Interceptor = (message: IMessage) => Promise<IMessage>;
+
 export class AgentBuilder {
     public instructions: string | undefined;
     public toolList: ITool[] = [];
+    public interceptors: Interceptor[] = [];
 
     public setInstructions(instructions: string) {
         this.instructions = instructions;
@@ -27,6 +30,16 @@ export class AgentBuilder {
 
     public tool(tool: ITool) {
         this.toolList.push(tool);
+        return this;
+    }
+
+    public interceptor(interceptor: Interceptor) {
+        this.interceptors.push(interceptor);
+        return this;
+    }
+
+    public attachInterceptors(...interceptors: Interceptor[]) {
+        this.interceptors.push(...interceptors);
         return this;
     }
 
@@ -46,8 +59,10 @@ export class Agent {
     private readonly MAX_LOOPS_ALLOWED = 30;
     private openai: OpenAI;
     private messageHistory: IMessage[] = [];
+    private interceptors: Interceptor[] = [];
 
     constructor(builder: AgentBuilder) {
+        this.interceptors = [...builder.interceptors];
         this.toolMap = new Map();
 
         for (const tool of builder.toolList) {
@@ -73,8 +88,30 @@ export class Agent {
         return new AgentBuilder();
     }
 
+    public attachInterceptor(interceptor: Interceptor): this {
+        this.interceptors.push(interceptor);
+        return this;
+    }
+
+    public attachInterceptors(...interceptors: Interceptor[]): this {
+        this.interceptors.push(...interceptors);
+        return this;
+    }
+
+    private async notifyInterceptors(message: IMessage): Promise<IMessage> {
+        let current = message;
+        for (const interceptor of this.interceptors) {
+            current = await interceptor(current);
+        }
+        return current;
+    }
+
+    private async pushMessage(message: IMessage): Promise<void> {
+        this.messageHistory.push(await this.notifyInterceptors(message));
+    }
+
     public async run(input: string): Promise<IMessage[]> {
-        this.messageHistory.push({ role: "user", content: input });
+        await this.pushMessage({ role: "user", content: input });
 
         for (let i = 0; i < this.MAX_LOOPS_ALLOWED; i++) {
             const llmResponse = await this.openai.chat.completions.create({
@@ -94,14 +131,14 @@ export class Agent {
             try {
                 parsedResult = JSON.parse(rawLLMResponse) as AgentStep;
             } catch {
-                this.messageHistory.push({ role: "assistant", content: rawLLMResponse });
+                await this.pushMessage({ role: "assistant", content: rawLLMResponse });
                 continue;
             }
 
             const step = parsedResult.step?.toLowerCase();
 
             if (step === "output") {
-                this.messageHistory.push({
+                await this.pushMessage({
                     role: "assistant",
                     content: parsedResult.text ?? rawLLMResponse,
                 });
@@ -113,7 +150,7 @@ export class Agent {
                 const tool = functionName ? this.toolMap.get(functionName) : undefined;
 
                 if (!tool) {
-                    this.messageHistory.push({
+                    await this.pushMessage({
                         role: "assistant",
                         content: `Error: Tool ${functionName ?? "unknown"} not found. Check available tools and try again.`,
                     });
@@ -121,11 +158,11 @@ export class Agent {
                 }
 
                 const toolResult = await tool.executor(functionInput ?? "");
-                this.messageHistory.push({ role: "assistant", content: toolResult });
+                await this.pushMessage({ role: "assistant", content: toolResult });
                 continue;
             }
 
-            this.messageHistory.push({
+            await this.pushMessage({
                 role: "assistant",
                 content: parsedResult.text ?? rawLLMResponse,
             });

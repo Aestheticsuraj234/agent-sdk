@@ -1,5 +1,5 @@
 import "./env";
-import { Agent, type ITool } from "./app/agent";
+import { Agent, type Interceptor, type ITool } from "./app/agent";
 
 const weatherTool: ITool = {
     name: "fetchWeatherInfo",
@@ -17,11 +17,24 @@ const weatherTool: ITool = {
     },
 };
 
+const logInterceptor: Interceptor = async (message) => {
+    console.log(`[${message.role}] ${message.content}`);
+    return message;
+};
+
 async function main() {
     const agent = Agent.builder()
         .setInstructions("You are an expert weather agent")
         .tool(weatherTool)
+        .attachInterceptors(logInterceptor)
         .build();
+
+    agent.attachInterceptor(async (message) => {
+        if (message.role === "assistant") {
+            console.log("  -> assistant step recorded");
+        }
+        return message;
+    });
 
     const result = await agent.run("Can you tell me weather of delhi!");
     console.log(JSON.stringify(result, null, 2));
