@@ -3,10 +3,16 @@
   "module": "src/app/agent.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "start": "bun run src/index.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "openai": "^7.1.0"
   }
 }
