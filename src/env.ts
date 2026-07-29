@@ -6,4 +6,8 @@ const requireEnv = (name: string): string => {
     return value;
 };
 
+const optionalEnv = (name: string): string | undefined => process.env[name]?.trim() || undefined;
+
 export const OPENAI_API_KEY = requireEnv("OPENAI_API_KEY");
+export const MEM0_API_KEY = optionalEnv("MEM0_API_KEY");
+export const MEM0_USER_ID = optionalEnv("MEM0_USER_ID") ?? "default-user";

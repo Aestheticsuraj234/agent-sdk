@@ -9,6 +9,8 @@ A TypeScript agent harness built on [Bun](https://bun.com) and OpenAI. The agent
 - **Live weather** — real forecasts via [Open-Meteo](https://open-meteo.com) (no extra API key)
 - **CLI tool** — run host shell commands with safety guardrails
 - **Interceptors** — subscribe to every message as it enters history (logging, metrics, transforms)
+- **Long-term memory** — persistent conversation memory via [mem0](https://mem0.ai) (Platform API)
+- **Agent handoff** — specialist agents can delegate to each other via `AGENT_HANDOFF` and the `Orchestrator`
 - **Interactive CLI** — REPL mode or one-shot prompts from the command line
 
 ## Prerequisites
@@ -30,9 +32,13 @@ Create a `.env` file in the project root:
 
 ```env
 OPENAI_API_KEY=sk-...
+MEM0_API_KEY=m0-...          # optional — enables mem0 long-term memory
+MEM0_USER_ID=default-user    # optional — scopes memories per user
 ```
 
 Bun loads `.env` automatically on startup. The app validates that `OPENAI_API_KEY` is set before running.
+
+Get a free mem0 API key at [app.mem0.ai](https://app.mem0.ai). Without `MEM0_API_KEY`, the agent runs normally but memory recall/store is disabled.
 
 ## Usage
 
@@ -96,6 +102,70 @@ When external data is needed, the model emits a tool request:
 
 The agent executes the tool, appends the result to message history, and continues the pipeline until an `OUTPUT` step is reached.
 
+### Agent handoff
+
+Register multiple agents with an `Orchestrator`. Each agent's system prompt is automatically updated with the list of available agents (via `.handoff()` / orchestrator sync).
+
+When an agent needs a specialist, it emits:
+
+```json
+{
+  "step": "AGENT_HANDOFF",
+  "agentId": "weather",
+  "text": "What is the current weather in Delhi?"
+}
+```
+
+The orchestrator runs the target agent, returns the reply as a `developer` message, and the calling agent continues.
+
+```typescript
+import { Agent } from "./app/agent";
+import { Orchestrator } from "./app/orchestrator";
+import { weatherTool } from "./tools";
+
+const orchestrator = new Orchestrator();
+
+const weatherAgent = Agent.builder()
+  .setId("weather")
+  .setInstructions("Weather specialist.")
+  .tool(weatherTool)
+  .build();
+
+const coordinator = Agent.builder()
+  .setId("coordinator")
+  .setInstructions("Route weather questions to the weather agent via AGENT_HANDOFF.")
+  .build();
+
+orchestrator
+  .register({ id: "weather", name: "Weather Agent", description: "Live weather", agent: weatherAgent })
+  .register({ id: "coordinator", name: "Coordinator", description: "Routes tasks", agent: coordinator });
+
+await orchestrator.run("coordinator", "What's the weather in London?");
+```
+
+Handoff depth is capped at 5 to prevent infinite loops.
+
+### Long-term memory (mem0)
+
+Attach a shared `MemoryStore` to any agent. Before each run, relevant memories are retrieved and injected into the system prompt. After a successful `OUTPUT`, the conversation is saved.
+
+```typescript
+import { sharedMemoryStore } from "./memory/store";
+
+const agent = Agent.builder()
+  .setId("coordinator")
+  .memory(sharedMemoryStore, { userId: "alice", agentId: "coordinator" })
+  .build();
+```
+
+| Method | Description |
+|--------|-------------|
+| `recall(query, context)` | Search mem0 for relevant past memories |
+| `remember(messages, context)` | Store new memories after a completed run |
+| `.memory(store, context)` | Attach memory to an agent via the builder |
+
+Memories are scoped by `userId`, `agentId`, and optional `runId`.
+
 ### Builder pattern
 
 ```typescript
@@ -152,8 +222,12 @@ Use `.attachInterceptors(...)` to register multiple at build time or runtime.
 src/
 ├── index.ts          # CLI entry point
 ├── env.ts            # Environment validation
+├── memory/
+│   └── store.ts      # mem0 MemoryStore wrapper
 ├── app/
 │   ├── agent.ts      # Agent, AgentBuilder, interceptors
+│   ├── orchestrator.ts # Multi-agent registration and handoff
+│   ├── instructions.ts # System prompt + handoff context builder
 │   └── config.ts     # Harness system prompt
 └── tools/
     ├── index.ts      # defaultTools export
@@ -183,6 +257,8 @@ Use with care, especially in production or shared environments.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `MEM0_API_KEY` | No | mem0 Platform API key — enables long-term memory |
+| `MEM0_USER_ID` | No | User scope for memories (default: `default-user`) |
 
 The default model is `gpt-4o-mini`, configured in `src/app/agent.ts`.
 

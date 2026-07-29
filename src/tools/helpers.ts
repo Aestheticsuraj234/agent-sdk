@@ -12,8 +12,13 @@ export function parseToolInput(input: string): unknown {
 export function toolInputString(input: string): string {
     const parsed = parseToolInput(input);
     if (typeof parsed === "string") return parsed;
-    if (parsed && typeof parsed === "object" && "query" in parsed) {
-        return String((parsed as { query: unknown }).query);
+    if (parsed && typeof parsed === "object") {
+        const record = parsed as Record<string, unknown>;
+        for (const key of ["query", "city", "name", "word", "repo", "ip", "url", "command"]) {
+            if (key in record && record[key] != null) {
+                return String(record[key]);
+            }
+        }
     }
     return JSON.stringify(parsed);
 }
